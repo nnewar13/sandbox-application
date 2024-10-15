@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Resources:
+  BookAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      DefinitionBody:
+        swagger: '2.0'
+        info:
+          title: Book API
+          description: API for managing books
+        paths:
+          /books:
+            get:
+              responses:
+                '200':
+                  description: List of books
+            post:
+              responses:
+                '201':
+                  description: Created book
+
+  BookLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'book-lambda-${AWS::Region}'
+      Runtime: python3.9
+      Handler: cft_lambda.lambda_handler
+      CodeUri: src/cft_lambda.py
+      Events:
+        GetBooks:
+          Type: Api
+          Properties:
+            Path: /books
+            Method: get
+        CreateBook:
+          Type: Api
+          Properties:
+            Path: /books
+            Method: post
+
+  BookTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: books
+      AttributeDefinitions:
+        -
+          AttributeName: id
+          AttributeType: S
+        -
+          AttributeName: title
+          AttributeType: S
+      KeySchema:
+        -
+          AttributeName: id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: '5'
+        WriteCapacityUnits: '5'
