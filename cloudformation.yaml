@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Ascending Job Diva API
+
+Parameters:
+  JobDivaUserName:
+    Type: String
+    Default: ${{ secrets.JobDivaUserName }}
+  JobDivaClientId:
+    Type: String
+    Default: ${{ secrets.JobDivaClientId }}
+  JobDivaUserPassword:
+    Type: String
+    Default: ${{ secrets.JobDivaUserPassword }}
+  Layer:
+    Type: String
+    Default: 
+
+Mappings:
+  Constants:
+    LambdaTimeout:
+      Value: 600
+  EnvironmentMap:
+    test:
+      JobDivaUrl: 'https://api.jobdiva.com'
+    prod:
+      JobDivaUrl: 'https://api.jobdiva.com'
+Globals:
+  Function:
+    Timeout: !FindInMap [Constants, LambdaTimeout, Value]
+    Runtime: python3.12
+    Environment: 
+      Variables:
+        JOBDIVA_URL: !FindInMap [EnvironmentMap, !Ref Environment, JobDivaUrl]
+
+Resources:
+  # Lambda
+  SendSearchToJobDiva:
+    Type: AWS::Serverless::Function
+      Properties:
+        CodeUri: ./jobdiva
+        Handler: jobdiva.lambda_handler
+        Role: !GetAtt LambdaRole.Arn
+        Layers:
+          - !Ref Layer
+        Environment:
+            Variables:
+              JOBDIVA_SECRET_NAME: "jobdiva_secret_manager"
+              REGION: 'us-east-1'
+              JOBDIVA_SECRET_ARN: !Ref JobDivaSecretKey.Arn
+              JOBDIVA_KEY_ROTATION_LAMBDA: !Ref JobDivaSecretsKeyRotation.Arn
+
+  JobDivaSecretsKeyRotation:
+    Type: AWS::Serverless::Function
+      Properties:
+        CodeUri: ./jobdivarefreshtoken
+        Handler: jobdivarefreshtoken.refresh_token
+        Role: !GetAtt LambdaRole.Arn
+        Layers:
+          - !Ref Layer
+        Environment:
+          Variables:
+            JOBDIVA_SECRET_NAME: "jobdiva_secret_manager"
+            REGION: 'us-east-1'
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: 2012-10-17
+        Statement: 
+          - 
+            Effect: Allow
+            Principal: 
+              Service: 
+                - lambda.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      Policies:
+        -
+          PolicyName: LambdaRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: Allow
+                Action: 
+                  - cloudwatch:*
+                  - s3:*
+                  - logs:*
+                  - ssm:*
+                  - sns:*
+                  - secretsmanager:*
+                  - dynamodb:*
+                  - cognito-idp:*
+                  - es:*
+                  - ec2:*
+                  - lambda:InvokeFunction
+                  - sqs:*
+                  - bedrock:*
+                  - scheduler:*
+                  - events:*
+                Resource: "*"
+
+  # KMS Key
+  JobDivaKMS:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: "KMS Key to encrypt the Job Diva API secrets."
+      KeyUsage: 'ENCRYPT_DECRYPT'
+      KeyPolicy:
+        - Version: '2012-10-17'
+          Statement:
+            - Sid: 'AllowSecretManagerAccess'
+              Effect: 'Allow'
+              Principal:
+                AWS: '*'
+              Action: [
+                'kms:Encrypt',
+                'kms:Decrypt',
+                'kms:ReEncrypt*',
+                'kms:CreateGrant',
+                'kms:DescribeKey'
+              ]
+              Resource: '*'
+
+  # Secrets Manager
+  JobDivaSecretKey:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: "Stores the security keys information of the Job Diva API."
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "{JobDivaUserName}", "clientid": "{JobDivaClientId}", "password": "{JobDivaUserPassword}", "access_token": "", "refresh_token": ""}'
+      KmsKeyId: !Ref JobDivaKMS.Arn
+      Name: "Job Diva Secret Key Manager"
+      SecretString: "jobdiva_secret_manager"
+    
+  # Secret Key Rotation
+  JobDivaSecretKeyRotation:
+    Type: AWS::SecretsManager::RotationSchedule
+    Properties:
+      RotateImmediatelyOnUpdate: true
+      RotationLambdaARN: !Ref JobDivaSecretsKeyRotation.Arn
+      RotationRules:
+        ScheduleExpression: "rate(25 days)"
+      SecretId: !Ref JobDivaSecretKey.arn
